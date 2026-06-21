@@ -3,6 +3,7 @@ package com.aku.motiontracker;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
@@ -17,6 +18,9 @@ import com.google.common.util.concurrent.ListenableFuture;
 public class MainActivity extends AppCompatActivity {
     private PreviewView previewView;
     private TextView tvStatus;
+    private Button btnSwitch;
+    private ProcessCameraProvider cameraProvider;
+    private boolean isBackCamera = true;
     private static final int REQUEST_CAMERA = 100;
 
     @Override
@@ -26,6 +30,12 @@ public class MainActivity extends AppCompatActivity {
 
         previewView = findViewById(R.id.previewView);
         tvStatus = findViewById(R.id.tvStatus);
+        btnSwitch = findViewById(R.id.btnSwitch);
+
+        btnSwitch.setOnClickListener(v -> {
+            isBackCamera = !isBackCamera;
+            startCamera();
+        });
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -41,15 +51,17 @@ public class MainActivity extends AppCompatActivity {
             ProcessCameraProvider.getInstance(this);
         future.addListener(() -> {
             try {
-                ProcessCameraProvider provider = future.get();
+                cameraProvider = future.get();
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
-                provider.unbindAll();
-                provider.bindToLifecycle(this,
-                    CameraSelector.DEFAULT_BACK_CAMERA, preview);
-                tvStatus.setText("Kamera aktif");
+                CameraSelector selector = isBackCamera ?
+                    CameraSelector.DEFAULT_BACK_CAMERA :
+                    CameraSelector.DEFAULT_FRONT_CAMERA;
+                cameraProvider.unbindAll();
+                cameraProvider.bindToLifecycle(this, selector, preview);
+                tvStatus.setText(isBackCamera ? "Kamera Belakang" : "Kamera Depan");
             } catch (Exception e) {
-                tvStatus.setText("Kamera gagal: " + e.getMessage());
+                tvStatus.setText("Error: " + e.getMessage());
             }
         }, ContextCompat.getMainExecutor(this));
     }
