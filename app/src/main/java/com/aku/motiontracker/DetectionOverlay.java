@@ -7,79 +7,70 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.View;
-import com.google.mlkit.vision.objects.DetectedObject;
 import java.util.ArrayList;
 import java.util.List;
 
-// View khusus buat gambar kotak di atas objek yang terdeteksi
 public class DetectionOverlay extends View {
 
-    // Paint = alat gambar, seperti kuas di Canvas
     private final Paint boxPaint = new Paint();
     private final Paint textPaint = new Paint();
+    private final Paint bgPaint = new Paint();
 
-    // List objek yang terdeteksi dari kamera
-    private List<DetectedObject> detectedObjects = new ArrayList<>();
-
-    // Ukuran preview kamera (buat scale koordinat)
+    private List<ObjectDetectorHelper.Detection> detections = new ArrayList<>();
     private int imageWidth = 1;
     private int imageHeight = 1;
 
     public DetectionOverlay(Context context, AttributeSet attrs) {
         super(context, attrs);
 
-        // Setup garis kotak hijau
         boxPaint.setColor(Color.GREEN);
         boxPaint.setStyle(Paint.Style.STROKE);
         boxPaint.setStrokeWidth(4f);
 
-        // Setup teks label putih
         textPaint.setColor(Color.WHITE);
         textPaint.setTextSize(40f);
         textPaint.setStyle(Paint.Style.FILL);
+
+        bgPaint.setColor(Color.argb(150, 0, 0, 0));
+        bgPaint.setStyle(Paint.Style.FILL);
     }
 
-    // Method ini dipanggil setiap kali ada deteksi baru dari kamera
-    public void updateDetections(List<DetectedObject> objects, int imgWidth, int imgHeight) {
-        this.detectedObjects = objects;
+    public void updateDetections(List<ObjectDetectorHelper.Detection> objects,
+            int imgWidth, int imgHeight) {
+        this.detections = objects;
         this.imageWidth = imgWidth;
         this.imageHeight = imgHeight;
-        // invalidate() = paksa View ini untuk digambar ulang
         invalidate();
     }
 
-    // onDraw dipanggil otomatis setiap kali invalidate() dipanggil
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        // Hitung ratio scale antara ukuran kamera vs ukuran layar
         float scaleX = (float) getWidth() / imageWidth;
         float scaleY = (float) getHeight() / imageHeight;
 
-        for (DetectedObject obj : detectedObjects) {
-            // Ambil bounding box dari objek
-            RectF box = new RectF(obj.getBoundingBox());
+        for (ObjectDetectorHelper.Detection det : detections) {
+            RectF box = new RectF(
+                det.boundingBox.left * getWidth(),
+                det.boundingBox.top * getHeight(),
+                det.boundingBox.right * getWidth(),
+                det.boundingBox.bottom * getHeight()
+            );
 
-            // Scale koordinat dari ukuran kamera ke ukuran layar
-            box.left *= scaleX;
-            box.right *= scaleX;
-            box.top *= scaleY;
-            box.bottom *= scaleY;
-
-            // Gambar kotak hijau di sekitar objek
+            // Gambar kotak hijau
             canvas.drawRect(box, boxPaint);
 
-            // Ambil label objek (kalau ada)
-            String label = "Objek";
-            if (!obj.getLabels().isEmpty()) {
-                label = obj.getLabels().get(0).getText();
-                float confidence = obj.getLabels().get(0).getConfidence();
-                label = label + " " + (int)(confidence * 100) + "%";
-            }
+            // Label nama objek + confidence
+            String label = det.label + " " + (int)(det.confidence * 100) + "%";
 
-            // Tulis label di atas kotak
-            canvas.drawText(label, box.left, box.top - 10, textPaint);
+            // Background label biar mudah dibaca
+            float textWidth = textPaint.measureText(label);
+            canvas.drawRect(box.left, box.top - 50,
+                box.left + textWidth + 10, box.top, bgPaint);
+
+            // Tulis label
+            canvas.drawText(label, box.left + 5, box.top - 10, textPaint);
         }
     }
 }

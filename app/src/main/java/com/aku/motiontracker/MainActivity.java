@@ -2,6 +2,7 @@ package com.aku.motiontracker;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.TextView;
@@ -17,11 +18,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.objects.DetectedObject;
-import com.google.mlkit.vision.objects.ObjectDetection;
-import com.google.mlkit.vision.objects.ObjectDetector;
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -35,13 +31,8 @@ public class MainActivity extends AppCompatActivity {
     private ProcessCameraProvider cameraProvider;
     private boolean isBackCamera = true;
     private static final int REQUEST_CAMERA = 100;
-
-    // ExecutorService = thread khusus buat proses kamera di background
-    // Supaya tidak lag di main thread (UI thread)
     private ExecutorService cameraExecutor;
-
-    // ObjectDetector = AI dari ML Kit buat deteksi objek
-    private ObjectDetector objectDetector;
+    private ObjectDetectorHelper detector;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,22 +43,16 @@ public class MainActivity extends AppCompatActivity {
         tvStatus = findViewById(R.id.tvStatus);
         btnSwitch = findViewById(R.id.btnSwitch);
         overlayView = findViewById(R.id.overlayView);
-
-        // Inisialisasi thread background
         cameraExecutor = Executors.newSingleThreadExecutor();
 
-        // Setup ML Kit Object Detector
-        // STREAM_MODE = mode real-time (cocok buat kamera live)
-        // enableMultipleObjects = bisa deteksi lebih dari 1 objek sekaligus
-        // enableClassification = aktifkan label nama objek
-        ObjectDetectorOptions options = new ObjectDetectorOptions.Builder()
-            .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
-            .enableMultipleObjects()
-            .enableClassification()
-            .build();
-
-        // Buat instance detector dari options tadi
-        objectDetector = ObjectDetection.getClient(options);
+        // Inisialisasi detector TFLite
+        detector = new ObjectDetectorHelper(this);
+        try {
+            detector.initialize();
+            tvStatus.setText("Model loaded!");
+        } catch (Exception e) {
+            tvStatus.setText("Error load model: " + e.getMessage());
+        }
 
         btnSwitch.setOnClickListener(v -> {
             isBackCamera = !isBackCamera;
@@ -89,19 +74,14 @@ public class MainActivity extends AppCompatActivity {
         future.addListener(() -> {
             try {
                 cameraProvider = future.get();
-
-                // Preview = tampilan live kamera di layar
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-                // ImageAnalysis = ambil frame kamera untuk diproses AI
-                // STRATEGY_KEEP_ONLY_LATEST = kalau AI masih proses frame lama,
-                // frame baru langsung ganti (tidak numpuk di antrian)
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build();
 
-                // Set analyzer = fungsi yang dipanggil setiap ada frame baru
                 imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeImage);
 
                 CameraSelector selector = isBackCamera ?
@@ -109,7 +89,6 @@ public class MainActivity extends AppCompatActivity {
                     CameraSelector.DEFAULT_FRONT_CAMERA;
 
                 cameraProvider.unbindAll();
-                // Bind preview + imageAnalysis sekaligus ke lifecycle
                 cameraProvider.bindToLifecycle(this, selector, preview, imageAnalysis);
                 tvStatus.setText(isBackCamera ? "Kamera Belakang" : "Kamera Depan");
 
@@ -119,39 +98,23 @@ public class MainActivity extends AppCompatActivity {
         }, ContextCompat.getMainExecutor(this));
     }
 
-    // Method ini dipanggil setiap frame dari kamera
     @OptIn(markerClass = ExperimentalGetImage.class)
     private void analyzeImage(ImageProxy imageProxy) {
-        if (imageProxy.getImage() == null) {
-            imageProxy.close();
-            return;
-        }
+        // Konversi ImageProxy ke Bitmap
+        Bitmap bitmap = imageProxy.toBitmap();
+        int imgWidth = imageProxy.getWidth();
+        int imgHeight = imageProxy.getHeight();
 
-        // Konversi frame kamera ke format yang bisa diproses ML Kit
-        InputImage image = InputImage.fromMediaImage(
-            imageProxy.getImage(),
-            imageProxy.getImageInfo().getRotationDegrees()
-        );
+        // Jalanin detector
+        List<ObjectDetectorHelper.Detection> detections = detector.detect(bitmap);
 
-        int imageWidth = imageProxy.getWidth();
-        int imageHeight = imageProxy.getHeight();
+        // Update UI di main thread
+        runOnUiThread(() -> {
+            overlayView.updateDetections(detections, imgWidth, imgHeight);
+            tvStatus.setText("Deteksi: " + detections.size() + " objek");
+        });
 
-        // Proses frame dengan AI detector
-        objectDetector.process(image)
-            .addOnSuccessListener(detectedObjects -> {
-                // Kalau berhasil, update overlay dengan hasil deteksi
-                // runOnUiThread karena overlay harus diupdate di UI thread
-                runOnUiThread(() -> {
-                    overlayView.updateDetections(detectedObjects, imageWidth, imageHeight);
-                    tvStatus.setText("Deteksi: " + detectedObjects.size() + " objek");
-                });
-            })
-            .addOnFailureListener(e -> {
-                runOnUiThread(() -> tvStatus.setText("Error deteksi: " + e.getMessage()));
-            })
-            // PENTING: selalu close imageProxy setelah selesai
-            // Kalau tidak di-close, kamera akan berhenti mengirim frame baru
-            .addOnCompleteListener(task -> imageProxy.close());
+        imageProxy.close();
     }
 
     @Override
@@ -170,8 +133,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // Matikan thread background dan detector saat app ditutup
         cameraExecutor.shutdown();
-        objectDetector.close();
+        detector.close();
     }
 }
